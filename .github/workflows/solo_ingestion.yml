@@ -1,7 +1,7 @@
 name: 🔄 Solo Ingestion Run
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # Manual trigger from GitHub UI
 
 jobs:
   ingest:
@@ -17,7 +17,8 @@ jobs:
           python-version: '3.10'
 
       - name: 📦 Install dependencies
-        run: pip install -r requirements.txt || pip install requests pandas
+        run: |
+          pip install -r requirements.txt || pip install requests pandas
 
       - name: 🔑 Set environment variables
         env:
@@ -29,7 +30,8 @@ jobs:
           echo "✅ Environment ready"
           echo "League: $LEAGUE_ID | Season: $SEASON | Round: $ROUND"
 
-      - name: ⚽ Run Fetch Raw Round
+      - name: ⚽ Run Fetch Raw Round Script
+        working-directory: ./football-insights/src/ingestion
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           LEAGUE_ID: ${{ vars.LEAGUE_ID }}

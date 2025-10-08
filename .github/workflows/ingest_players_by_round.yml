@@ -1,0 +1,30 @@
+name: Ingest Player Stats by Round
+
+on:
+  # Manual only — runs when you click “Run workflow” in GitHub Actions
+  workflow_dispatch:
+
+jobs:
+  ingest-player-round:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run player ingestion by round
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: |
+          # Adjust the path if your script lives somewhere else
+          python ingest_players_by_round.py --league 39 --season 2024 --round current

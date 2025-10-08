@@ -1,0 +1,65 @@
+name: Pandas Player Data (write CSVs to repo)
+
+on:
+  workflow_dispatch:
+    inputs:
+      league:
+        description: "League ID (e.g., 39)"
+        required: true
+        default: "39"
+      season:
+        description: "Season year (e.g., 2023)"
+        required: true
+        default: "2023"
+      round:
+        description: "Round name (e.g., 'Regular Season - 1') or 'all'"
+        required: true
+        default: "all"
+
+permissions:
+  contents: write  # allow this workflow to push commits
+
+jobs:
+  pandas-player-round:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ensure output folder exists
+        run: mkdir -p src/ingestion/raw-data
+
+      - name: Run pandas fetch → write CSV(s)
+        working-directory: src/ingestion
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          RAPIDAPI_HOST: ${{ secrets.RAPIDAPI_HOST || '' }}
+        run: |
+          python pandas_players_by_round.py \
+            --league ${{ github.event.inputs.league }} \
+            --season ${{ github.event.inputs.season }} \
+            --round "${{ github.event.inputs.round }}" \
+            --outdir "raw-data"
+
+      - name: Commit CSV(s) back to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/ingestion/raw-data/*.csv
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Add player CSVs: league=${{ github.event.inputs.league }}, season=${{ github.event.inputs.season }}, round=${{ github.event.inputs.round }}"
+            git push
+          fi

@@ -1,79 +1,131 @@
 import os
 import sys
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List
+
 import requests
 import pandas as pd
-from datetime import datetime
 
-# === 🔧 Config ===
-API_KEY = os.getenv("API_FOOTBALL_KEY")  # from GitHub Secrets
-LEAGUE_ID = int(os.getenv("LEAGUE_ID", 39))     # default EPL
-SEASON = int(os.getenv("SEASON", 2023))
-ROUND = os.getenv("ROUND", "Regular Season - 1")
+# ==== Config (env-first, sensible defaults for local runs) ====
+API_KEY   = os.getenv("API_FOOTBALL_KEY")
+RAPIDAPI_HOST = os.getenv("RAPIDAPI_HOST", "").strip()  # e.g. "api-football-v1.p.rapidapi.com"
+LEAGUE_ID = int(os.getenv("LEAGUE_ID", 39))
+SEASON    = int(os.getenv("SEASON", 2023))
+ROUND     = os.getenv("ROUND", "Regular Season - 1")
 
-# === Paths ===
-OUT_DIR = os.path.join(os.path.dirname(__file__), "raw-data")
+OUT_DIR  = os.path.join(os.path.dirname(__file__), "raw-data")
 OUT_PATH = os.path.join(OUT_DIR, "latest_player_by_round.csv")
 
-# === Checks ===
-if not API_KEY:
-    print("❌ Missing API_FOOTBALL_KEY in environment.")
-    sys.exit(1)
+API_BASE = "https://v3.football.api-sports.io"
+HEADERS = (
+    {"X-RapidAPI-Key": API_KEY, "X-RapidAPI-Host": RAPIDAPI_HOST}
+    if RAPIDAPI_HOST and API_KEY else
+    {"x-apisports-key": API_KEY} if API_KEY else {}
+)
 
-os.makedirs(OUT_DIR, exist_ok=True)
+# ==== Helpers ====
+def _require_env():
+    if not API_KEY:
+        print("❌ Missing API_FOOTBALL_KEY in environment.", file=sys.stderr)
+        sys.exit(1)
 
-# === API setup ===
-BASE = "https://v3.football.api-sports.io"
-HEADERS = {"x-apisports-key": API_KEY}
+def _get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """GET with basic retry + status check; returns parsed JSON."""
+    url = f"{API_BASE}/{path.lstrip('/')}"
+    last_err = None
+    for attempt in range(5):
+        try:
+            r = requests.get(url, headers=HEADERS, params=params, timeout=45)
+            # Retry on 429/5xx
+            if r.status_code in (429, 500, 502, 503, 504):
+                raise requests.HTTPError(f"{r.status_code} from API", response=r)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last_err = e
+            time.sleep(0.5 * (2 ** attempt))
+    # One last attempt to show body for debugging if available
+    try:
+        txt = r.text[:4000]
+    except Exception:
+        txt = "<no body>"
+    raise RuntimeError(f"GET {url} failed. Last error: {last_err}. Body: {txt}")
 
-print(f"Fetching players for League {LEAGUE_ID}, Season {SEASON}, Round '{ROUND}'")
+def _safe_first(lst):
+    return lst[0] if isinstance(lst, list) and lst else {}
 
-# --- 1️⃣ Get fixtures for the round ---
-fixtures = requests.get(
-    f"{BASE}/fixtures",
-    headers=HEADERS,
-    params={"league": LEAGUE_ID, "season": SEASON, "round": ROUND}
-).json().get("response", [])
+def _coerce_float(x):
+    try:
+        return float(x) if x is not None and x != "" else None
+    except Exception:
+        return None
 
-if not fixtures:
-    print("⚠️  No fixtures found. Check season/round name.")
-    sys.exit(0)
+# ==== Main flow ====
+def main():
+    _require_env()
+    os.makedirs(OUT_DIR, exist_ok=True)
 
-rows = []
+    # 1) Fixtures for round
+    fx_json = _get("/fixtures", {"league": LEAGUE_ID, "season": SEASON, "round": ROUND})
+    fixtures = fx_json.get("response", []) or []
+    if not fixtures:
+        print("⚠️  No fixtures found. Check LEAGUE_ID/SEASON/ROUND.")
+        # Write an empty CSV with headers so downstream steps don’t break
+        pd.DataFrame(columns=[
+            "season","round","fixture_id","team","player","position","minutes",
+            "rating","goals","assists","fetched_datetime"
+        ]).to_csv(OUT_PATH, index=False, encoding="utf-8")
+        print(f"✅ Wrote empty CSV → {OUT_PATH}")
+        return
 
-# --- 2️⃣ Get players for each fixture ---
-for fx in fixtures:
-    fixture_id = fx["fixture"]["id"]
-    data = requests.get(
-        f"{BASE}/fixtures/players",
-        headers=HEADERS,
-        params={"fixture": fixture_id}
-    ).json().get("response", [])
+    rows: List[Dict[str, Any]] = []
+    fetched_ts = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
-    for team in data:
-        team_name = team["team"]["name"]
-        for p in team["players"]:
-            player = p["player"]
-            stats = p["statistics"][0] if p["statistics"] else {}
-            games = stats.get("games", {})
-            goals = stats.get("goals", {})
-            rows.append({
-                "season": SEASON,
-                "round": ROUND,
-                "fixture_id": fixture_id,
-                "team": team_name,
-                "player": player.get("name"),
-                "position": games.get("position"),
-                "minutes": games.get("minutes"),
-                "rating": games.get("rating"),
-                "goals": goals.get("total"),
-                "assists": goals.get("assists"),
-            })
+    # 2) Players per fixture
+    for f in fixtures:
+        fixture = f.get("fixture") or {}
+        fixture_id = fixture.get("id")
+        if not fixture_id:
+            continue
 
-# --- 3️⃣ Create DataFrame and add timestamp ---
-df = pd.DataFrame(rows)
-df["fetched_datetime"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        pl_json = _get("/fixtures/players", {"fixture": fixture_id})
+        teams = pl_json.get("response", []) or []
 
-# --- 4️⃣ Save to CSV ---
-df.to_csv(OUT_PATH, index=False)
+        for t in teams:
+            team_info = t.get("team") or {}
+            team_name = team_info.get("name")
+            players = t.get("players") or []
 
-print(f"✅ Saved {len(df)} player rows → {OUT_PATH}")
+            for p in players:
+                player_info = p.get("player") or {}
+                stats = _safe_first(p.get("statistics") or [])
+                games = stats.get("games", {}) or {}
+                goals = stats.get("goals", {}) or {}
+
+                rows.append({
+                    "season": SEASON,
+                    "round": ROUND,
+                    "fixture_id": fixture_id,
+                    "team": team_name,
+                    "player": player_info.get("name"),
+                    "position": games.get("position"),
+                    "minutes": games.get("minutes"),
+                    "rating": _coerce_float(games.get("rating")),  # coerce to float if possible
+                    "goals": goals.get("total"),
+                    "assists": goals.get("assists"),
+                    "fetched_datetime": fetched_ts,
+                })
+        # gentle pacing
+        time.sleep(0.15)
+
+    # 3) DataFrame + CSV
+    df = pd.DataFrame(rows, columns=[
+        "season","round","fixture_id","team","player","position",
+        "minutes","rating","goals","assists","fetched_datetime"
+    ])
+    df.to_csv(OUT_PATH, index=False, encoding="utf-8")
+    print(f"✅ Saved {len(df)} rows → {OUT_PATH}")
+
+if __name__ == "__main__":
+    main()

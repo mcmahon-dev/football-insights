@@ -13,7 +13,7 @@ def pick(d, path, default=None):
 
 def main():
     league = int(os.getenv("LEAGUE_ID", "39"))     # EPL by default
-    season = int(os.getenv("SEASON", "2024"))
+    season = int(os.getenv("SEASON", "2023"))
 
     # 1) Get recent fixtures for the season (limit keeps first run small)
     fixtures = []

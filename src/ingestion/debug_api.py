@@ -1,57 +1,46 @@
 import os, json
-from .api_football import get, paged_get
+from .api_football import get
 
-def peek(label, obj, limit=2):
-    try:
-        sample = obj[:limit]
-    except Exception:
-        sample = obj
-    print(f"\n=== {label} (showing up to {limit}) ===")
-    print(json.dumps(sample, indent=2, default=str))
+def dump_meta(name, data):
+    print(f"\n## META: {name}")
+    meta = {k: data.get(k) for k in ("errors", "results", "paging")}
+    print(json.dumps(meta, indent=2))
 
 def main():
-    league = int(os.getenv("LEAGUE_ID", "39"))    # EPL default
+    league = int(os.getenv("LEAGUE_ID", "39"))
     season = int(os.getenv("SEASON", "2024"))
-    round_limit = int(os.getenv("ROUND_LIMIT", "2"))
-    specific_round = os.getenv("ROUND_NAME")       # optional override
-    print(f"LEAGUE_ID={league} SEASON={season} ROUND_LIMIT={round_limit} ROUND_NAME={specific_round}")
+    round_name = os.getenv("ROUND_NAME") or "Regular Season - 1"
 
-    # 1) Get rounds
-    r = get("fixtures/rounds", {"league": league, "season": season})
-    print("\n# ROUNDS: meta")
-    print(json.dumps({k: r.get(k) for k in ("errors", "results", "paging")}, indent=2))
-    rounds = r.get("response", []) or []
-    print(f"Total rounds returned: {len(rounds)}")
-    peek("Rounds", rounds)
+    print(f"LEAGUE_ID={league} SEASON={season} ROUND_NAME='{round_name}'")
 
-    # 2) Choose rounds to fetch
-    targets = [specific_round] if specific_round else rounds[:round_limit]
-    print(f"Target rounds: {targets}")
+    # 1) Confirm the round exists for this season (optional)
+    rounds = get("fixtures/rounds", {"league": league, "season": season})
+    dump_meta("fixtures/rounds", rounds)
+    print("First 3 rounds:", (rounds.get("response") or [])[:3])
 
-    # 3) Fetch fixtures for each round
-    total_fx = 0
-    for rnd in targets:
-        fx_list = list(paged_get("fixtures", {"league": league, "season": season, "round": rnd}))
-        print(f"\n# FIXTURES for round='{rnd}': count={len(fx_list)}")
-        peek("Fixtures sample", [
-            {
-                "fixture_id": fx["fixture"]["id"],
-                "date": fx["fixture"]["date"],
-                "status": fx["fixture"]["status"]["short"],
-                "home": fx["teams"]["home"]["name"],
-                "away": fx["teams"]["away"]["name"],
-                "goals": fx.get("goals"),
-                "score_ht": fx.get("score", {}).get("halftime"),
-            } for fx in fx_list
-        ])
-        total_fx += len(fx_list)
+    # 2) Fetch fixtures for exactly that round — single call (no paging)
+    fx = get("fixtures", {"league": league, "season": season, "round": round_name})
+    dump_meta("fixtures", fx)
 
-    print(f"\nTOTAL fixtures across chosen rounds: {total_fx}")
-    if total_fx == 0:
-        print("\nTIPs if zero:\n"
-              "- Check LEAGUE_ID/SEASON are correct for your plan.\n"
-              "- Try setting ROUND_NAME exactly (e.g. 'Regular Season - 1').\n"
-              "- Free plans may limit historical data.\n")
+    resp = fx.get("response") or []
+    print(f"fixtures.response length = {len(resp)}")
 
-if __name__ == "__main__":
-    main()
+    if resp:
+        sample = resp[0]
+        # print a minimal, schema-agnostic peek to avoid KeyErrors
+        skinny = {
+            "fixture_id": sample.get("fixture", {}).get("id"),
+            "date": sample.get("fixture", {}).get("date"),
+            "status": sample.get("fixture", {}).get("status", {}).get("short"),
+            "home": sample.get("teams", {}).get("home", {}).get("name"),
+            "away": sample.get("teams", {}).get("away", {}).get("name"),
+            "goals": sample.get("goals"),
+        }
+        print("\nFirst fixture (skinny):")
+        print(json.dumps(skinny, indent=2))
+    else:
+        print("\nNo fixtures returned for that round. Tips:")
+        print("- Make sure ROUND_NAME matches exactly one value from fixtures/rounds.")
+        print("- Double-check season (EPL 2023 = 2023/24).")
+        print("- Try another round (e.g., 'Regular Season - 20').")
+        print("- Some plans restrict older seasons.")

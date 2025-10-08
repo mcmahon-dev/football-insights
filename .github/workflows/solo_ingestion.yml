@@ -1,0 +1,38 @@
+name: 🔄 Solo Ingestion Run
+
+on:
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛎️ Checkout repo
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt || pip install requests pandas
+
+      - name: 🔑 Set environment variables
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          LEAGUE_ID: ${{ vars.LEAGUE_ID }}
+          SEASON: ${{ vars.SEASON }}
+          ROUND: ${{ vars.ROUND }}
+        run: |
+          echo "✅ Environment ready"
+          echo "League: $LEAGUE_ID | Season: $SEASON | Round: $ROUND"
+
+      - name: ⚽ Run Fetch Raw Round
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          LEAGUE_ID: ${{ vars.LEAGUE_ID }}
+          SEASON: ${{ vars.SEASON }}
+          ROUND: ${{ vars.ROUND }}
+        run: python fetch_raw_round.py

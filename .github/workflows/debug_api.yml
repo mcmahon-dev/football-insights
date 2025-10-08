@@ -1,0 +1,44 @@
+name: Debug API
+
+on:
+  workflow_dispatch:
+    inputs:
+      round_name:
+        description: "Optional: exact round name (e.g. Regular Season - 1)"
+        required: false
+        default: ""
+      league_id:
+        description: "League ID (default 39 = EPL)"
+        required: false
+        default: "39"
+      season:
+        description: "Season (default 2024)"
+        required: false
+        default: "2024"
+      round_limit:
+        description: "How many rounds to sample if no round_name"
+        required: false
+        default: "2"
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    env:
+      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      LEAGUE_ID: ${{ github.event.inputs.league_id }}
+      SEASON: ${{ github.event.inputs.season }}
+      ROUND_LIMIT: ${{ github.event.inputs.round_limit }}
+      ROUND_NAME: ${{ github.event.inputs.round_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run debug script
+        run: python -m src.ingestion.debug_api

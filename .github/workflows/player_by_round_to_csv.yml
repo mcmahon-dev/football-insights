@@ -1,0 +1,59 @@
+name: Player by Round → CSV (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      league:
+        description: "League ID (e.g., 39 = EPL)"
+        required: true
+        default: "39"
+      season:
+        description: "Season year (e.g., 2023)"
+        required: true
+        default: "2023"
+      round:
+        description: "Round name (e.g., 'Regular Season - 1')"
+        required: true
+        default: "Regular Season - 1"
+
+permissions:
+  contents: write
+
+jobs:
+  player-by-round:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pandas requests
+
+      - name: Run player_by_round_to_csv.py
+        working-directory: src/ingestion
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          LEAGUE_ID: ${{ github.event.inputs.league }}
+          SEASON: ${{ github.event.inputs.season }}
+          ROUND: ${{ github.event.inputs.round }}
+        run: python player_by_round_to_csv.py
+
+      - name: Commit CSV back to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/ingestion/raw-data/latest_player_by_round.csv
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update latest_player_by_round.csv for league=${{ github.event.inputs.league }} season=${{ github.event.inputs.season }} round=${{ github.event.inputs.round }}"
+            git push
+          fi

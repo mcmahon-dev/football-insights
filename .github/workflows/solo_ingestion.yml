@@ -1,7 +1,7 @@
 name: 🔄 Solo Ingestion Run
 
 on:
-  workflow_dispatch:  # Manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   ingest:
@@ -11,27 +11,32 @@ jobs:
       - name: 🛎️ Checkout repo
         uses: actions/checkout@v4
 
+      - name: 🧭 Show working dirs (debug)
+        run: |
+          echo "PWD: $(pwd)"
+          echo "Repo tree (top level):"
+          ls -la
+          echo "src/ingestion tree:"
+          ls -la ./src/ingestion || true
+
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: 📦 Install dependencies
-        run: |
-          pip install -r requirements.txt || pip install requests pandas
+        run: pip install -r requirements.txt || pip install requests pandas
 
-      - name: 🔑 Set environment variables
+      - name: 🔑 Echo environment (no secrets)
         env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           LEAGUE_ID: ${{ vars.LEAGUE_ID }}
           SEASON: ${{ vars.SEASON }}
           ROUND: ${{ vars.ROUND }}
         run: |
-          echo "✅ Environment ready"
           echo "League: $LEAGUE_ID | Season: $SEASON | Round: $ROUND"
 
       - name: ⚽ Run Fetch Raw Round Script
-        working-directory: ./football-insights/src/ingestion
+        working-directory: ./src/ingestion
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           LEAGUE_ID: ${{ vars.LEAGUE_ID }}

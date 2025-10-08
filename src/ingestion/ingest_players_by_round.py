@@ -6,14 +6,12 @@ from typing import Any, Dict, List
 
 import requests
 from dotenv import load_dotenv
-
-# If your events job already imports supabase like this, keep it identical:
 from supabase import create_client, Client
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# ---- ENV (same as your events job) ----
+# ---- ENV ----
 API_KEY = os.getenv("API_FOOTBALL_KEY")
 RAPIDAPI_HOST = os.getenv("RAPIDAPI_HOST", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -24,7 +22,7 @@ if not API_KEY:
 if not (SUPABASE_URL and SUPABASE_KEY):
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE/KEY")
 
-# ---- HTTP setup (mirrors events: direct API-Football OR RapidAPI) ----
+# ---- HTTP ----
 API_BASE = "https://v3.football.api-sports.io"
 HEADERS = (
     {"X-RapidAPI-Key": API_KEY, "X-RapidAPI-Host": RAPIDAPI_HOST}
@@ -46,11 +44,11 @@ def apifootball_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         r.raise_for_status()
     raise RuntimeError(f"GET {url} failed after retries")
 
-# ---- Supabase client (same call signature as events) ----
+# ---- Supabase ----
 def supa() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ---- Round resolution & pulls (round -> fixtures -> players) ----
+# ---- API helpers ----
 def list_rounds(league_id: int, season: int, current_only: bool=False) -> List[str]:
     params = {"league": league_id, "season": season}
     if current_only:
@@ -76,7 +74,7 @@ def players_for_fixture(fixture_id: int) -> List[Dict[str, Any]]:
     d = apifootball_get("/fixtures/players", {"fixture": fixture_id})
     return d.get("response", []) or []
 
-# ---- Transform (flatten to DB rows) ----
+# ---- Transform ----
 def to_player_rows(fixture_id: int, payload: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for team_block in payload:
@@ -123,7 +121,7 @@ def to_player_rows(fixture_id: int, payload: List[Dict[str, Any]]) -> List[Dict[
                 rows.append(row)
     return rows
 
-# ---- Upsert (same pattern as events) ----
+# ---- Upsert ----
 def upsert_players(rows: List[Dict[str, Any]]) -> int:
     if not rows:
         return 0
@@ -131,8 +129,48 @@ def upsert_players(rows: List[Dict[str, Any]]) -> int:
     sb.table("fixture_player_stats").upsert(rows).execute()
     return len(rows)
 
-# ---- Orchestration (same CLI shape, just 'round' instead of 'date') ----
-def ingest_round(league: int, season: int, round_name: str) -> None:
+# ---- Round helpers / selection ----
+def parse_round_num(r: str) -> int:
+    """Parses 'Regular Season - 9' -> 9, returns -1 if not parsable."""
+    try:
+        return int(str(r).split("-")[-1].strip())
+    except Exception:
+        return -1
+
+def resolve_rounds(league: int, season: int, round_arg: str) -> List[str]:
+    """
+    round_arg options:
+      - 'current' : try current=true, else fallback to latest 'Regular Season - N'
+      - 'all'     : return all rounds in the season
+      - exact str : e.g. 'Regular Season - 5'
+    """
+    ra = (round_arg or "").strip().lower()
+    if ra == "all":
+        rounds = list_rounds(league, season, current_only=False)
+        if not rounds:
+            raise SystemExit("No rounds found for this league/season.")
+        logging.info("Resolved ALL rounds (%d)", len(rounds))
+        return rounds
+
+    if ra == "current":
+        rounds = list_rounds(league, season, current_only=True)
+        if not rounds:
+            logging.warning("No 'current' round returned. Falling back to latest regular-season round.")
+            all_rounds = list_rounds(league, season, current_only=False)
+            reg = [r for r in all_rounds if isinstance(r, str) and "Regular Season" in r]
+            reg.sort(key=parse_round_num)
+            if reg:
+                return [reg[-1]]
+            if all_rounds:
+                return [all_rounds[-1]]
+            raise SystemExit("Could not resolve current round (even after fallback).")
+        return rounds
+
+    # Specific round string
+    return [round_arg]
+
+# ---- Orchestration ----
+def ingest_round(league: int, season: int, round_name: str) -> int:
     fixtures = fixtures_for_round(league, season, round_name)
     total = 0
     for f in fixtures:
@@ -144,29 +182,21 @@ def ingest_round(league: int, season: int, round_name: str) -> None:
         n = upsert_players(rows)
         total += n
         logging.info("Fixture %s → %d player rows", fx_id, n)
-        time.sleep(0.25)  # gentle buffer between calls
+        time.sleep(0.25)
     logging.info("Round '%s' complete → %d player rows", round_name, total)
+    return total
 
 def main():
     parser = argparse.ArgumentParser(description="Ingest player stats by ROUND (round-driven, FPL-focused)")
     parser.add_argument("--league", type=int, required=True, help="League id (e.g., 39 for EPL)")
-    parser.add_argument("--season", type=int, required=True, help="Season year (e.g., 2024)")
-    parser.add_argument("--round", type=str, default="current", help="'current' or exact (e.g., 'Regular Season - 5')")
+    parser.add_argument("--season", type=int, required=True, help="Season year (e.g., 2023)")
+    parser.add_argument("--round", type=str, default="current",
+                        help="'current' | 'all' | exact string (e.g., 'Regular Season - 5')")
     args = parser.parse_args()
 
-    if args.round.lower() == "current":
-        rounds = list_rounds(args.league, args.season, current_only=True)
-        if not rounds:
-            raise SystemExit("Could not resolve current round.")
-        logging.info("Resolved current round(s): %s", rounds)
-    elif args.round:
-        rounds = [args.round]
-    else:
-        rounds = list_rounds(args.league, args.season, current_only=False)
-        logging.info("Fetched %d rounds for league %s season %s", len(rounds), args.league, args.season)
-
+    rounds = resolve_rounds(args.league, args.season, args.round)
     for r in rounds:
-        logging.info("=== Ingesting round: %s ===", r)
+        logging.info("=== Ingesting round: %s (season %s) ===", r, args.season)
         ingest_round(args.league, args.season, r)
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import os
 import sys
 import requests
 import pandas as pd
+from datetime import datetime
 
 # === 🔧 Config ===
 API_KEY = os.getenv("API_FOOTBALL_KEY")  # from GitHub Secrets
@@ -56,6 +57,8 @@ for fx in fixtures:
             games = stats.get("games", {})
             goals = stats.get("goals", {})
             rows.append({
+                "season": SEASON,
+                "round": ROUND,
                 "fixture_id": fixture_id,
                 "team": team_name,
                 "player": player.get("name"),
@@ -66,8 +69,11 @@ for fx in fixtures:
                 "assists": goals.get("assists"),
             })
 
-# --- 3️⃣ Create DataFrame and save ---
+# --- 3️⃣ Create DataFrame and add timestamp ---
 df = pd.DataFrame(rows)
+df["fetched_datetime"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+# --- 4️⃣ Save to CSV ---
 df.to_csv(OUT_PATH, index=False)
 
 print(f"✅ Saved {len(df)} player rows → {OUT_PATH}")

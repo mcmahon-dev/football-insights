@@ -29,9 +29,9 @@ jobs:
 
       - name: 🔑 Echo environment (no secrets)
         env:
-          LEAGUE_ID: ${{ vars.LEAGUE_ID }}
-          SEASON: ${{ vars.SEASON }}
-          ROUND: ${{ vars.ROUND }}
+          LEAGUE_ID: ${{ vars.LEAGUE_ID != '' && vars.LEAGUE_ID || 39 }}
+          SEASON: ${{ vars.SEASON != '' && vars.SEASON || 2023 }}
+          ROUND: ${{ vars.ROUND != '' && vars.ROUND || 'Regular Season - 1' }}
         run: |
           echo "League: $LEAGUE_ID | Season: $SEASON | Round: $ROUND"
 
@@ -39,7 +39,7 @@ jobs:
         working-directory: ./src/ingestion
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-          LEAGUE_ID: ${{ vars.LEAGUE_ID }}
-          SEASON: ${{ vars.SEASON }}
-          ROUND: ${{ vars.ROUND }}
+          LEAGUE_ID: ${{ vars.LEAGUE_ID != '' && vars.LEAGUE_ID || 39 }}
+          SEASON: ${{ vars.SEASON != '' && vars.SEASON || 2023 }}
+          ROUND: ${{ vars.ROUND != '' && vars.ROUND || 'Regular Season - 1' }}
         run: python fetch_raw_round.py

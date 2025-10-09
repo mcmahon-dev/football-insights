@@ -1,0 +1,41 @@
+name: 🧪 ETL Round → Supabase
+
+on:
+  workflow_dispatch:  # manual trigger only
+
+jobs:
+  etl_round:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛎️ Checkout repo
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: 📦 Install deps
+        run: |
+          pip install -r requirements.txt || pip install requests pandas
+
+      - name: 🔑 Echo config (safe)
+        env:
+          SEASON: ${{ vars.SEASON != '' && vars.SEASON || 2023 }}
+          ROUND: ${{ vars.ROUND != '' && vars.ROUND || 'Regular Season - 1' }}
+        run: |
+          echo "Season: $SEASON"
+          echo "Round:   $ROUND"
+
+      - name: 🧪 Run ETL Round
+        working-directory: ./src/ingestion
+        env:
+          # Identify which snapshot to read
+          SEASON: ${{ vars.SEASON != '' && vars.SEASON || 2023 }}
+          ROUND: ${{ vars.ROUND != '' && vars.ROUND || 'Regular Season - 1' }}
+          # Supabase
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+          SUPABASE_BUCKET: ${{ vars.SUPABASE_BUCKET != '' && vars.SUPABASE_BUCKET || 'api-football-raw' }}
+        run: python etl_round.py

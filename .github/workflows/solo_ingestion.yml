@@ -11,21 +11,14 @@ jobs:
       - name: 🛎️ Checkout repo
         uses: actions/checkout@v4
 
-      - name: 🧭 Show working dirs (debug)
-        run: |
-          echo "PWD: $(pwd)"
-          echo "Repo tree (top level):"
-          ls -la
-          echo "src/ingestion tree:"
-          ls -la ./src/ingestion || true
-
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: 📦 Install dependencies
-        run: pip install -r requirements.txt || pip install requests pandas
+        run: |
+          pip install -r requirements.txt || pip install requests pandas
 
       - name: 🔑 Echo environment (no secrets)
         env:
@@ -35,11 +28,26 @@ jobs:
         run: |
           echo "League: $LEAGUE_ID | Season: $SEASON | Round: $ROUND"
 
-      - name: ⚽ Run Fetch Raw Round Script
+      - name: ⚽ Run Fetch Raw Round (uploads to Supabase)
         working-directory: ./src/ingestion
         env:
+          # API-Football
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           LEAGUE_ID: ${{ vars.LEAGUE_ID != '' && vars.LEAGUE_ID || 39 }}
           SEASON: ${{ vars.SEASON != '' && vars.SEASON || 2023 }}
           ROUND: ${{ vars.ROUND != '' && vars.ROUND || 'Regular Season - 1' }}
+          # Supabase Storage
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_BUCKET: ${{ vars.SUPABASE_BUCKET != '' && vars.SUPABASE_BUCKET || 'api-football-raw' }}
+          # Safe defaults for rate limiting
+          MIN_INTERVAL_SECONDS: 6.5
+          MAX_ATTEMPTS: 3
         run: python fetch_raw_round.py
+
+      - name: 📂 List local output (debug)
+        run: |
+          echo "Top-level:"
+          ls -la
+          echo "Local raw-data tree:"
+          find ./src/ingestion/raw-data -maxdepth 4 -type f -print || true

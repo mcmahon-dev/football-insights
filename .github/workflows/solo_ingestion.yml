@@ -38,16 +38,14 @@ jobs:
           ROUND: ${{ vars.ROUND != '' && vars.ROUND || 'Regular Season - 1' }}
           # Supabase Storage
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
           SUPABASE_BUCKET: ${{ vars.SUPABASE_BUCKET != '' && vars.SUPABASE_BUCKET || 'api-football-raw' }}
-          # Safe defaults for rate limiting
+          # Rate limiting
           MIN_INTERVAL_SECONDS: 6.5
           MAX_ATTEMPTS: 3
         run: python fetch_raw_round.py
 
       - name: 📂 List local output (debug)
         run: |
-          echo "Top-level:"
-          ls -la
           echo "Local raw-data tree:"
           find ./src/ingestion/raw-data -maxdepth 4 -type f -print || true

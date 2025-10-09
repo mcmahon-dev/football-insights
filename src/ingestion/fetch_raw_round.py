@@ -1,6 +1,7 @@
-import os, sys, json, time, io
+import os, sys, json, time
 from pathlib import Path
 from datetime import datetime, timezone
+import urllib.parse
 import requests
 
 # ===== Env/config =====
@@ -13,56 +14,19 @@ ROUND     = os.getenv("ROUND", "Regular Season - 1")
 MAX_ATTEMPTS_PER_FIXTURE = int(os.getenv("MAX_ATTEMPTS", 3))
 MIN_INTERVAL_SECONDS = float(os.getenv("MIN_INTERVAL_SECONDS", 6.5))  # 10 req/min -> ~6.5s safe
 
-# Supabase Storage
+# Supabase Storage (RENAMED KEY)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE")  # <<< renamed
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "api-football-raw")
 
 if not API_KEY:
     print("❌ Missing API_FOOTBALL_KEY")
     sys.exit(1)
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-    print("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
+if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+    print("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE")
     sys.exit(1)
 
-# ---- Supabase client (storage REST; no extra deps needed) ----
-# Using Storage REST directly keeps the script lightweight & reliable on Actions.
-import base64
-import urllib.parse
-import requests as _rq
-
-def sb_upload_json(bucket: str, object_key: str, obj: dict, upsert=True) -> None:
-    """Upload a JSON object to Supabase Storage as application/json."""
-    url = f"{SUPABASE_URL}/storage/v1/object/{urllib.parse.quote(bucket)}/{urllib.parse.quote(object_key)}"
-    data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    headers = {
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-        "x-upsert": "true" if upsert else "false",
-    }
-    resp = _rq.post(url, headers=headers, data=data)
-    if resp.status_code not in (200, 201):
-        # Some gateways use PUT for upsert — try PUT if POST fails with 409/400
-        if resp.status_code in (400, 409):
-            resp = _rq.put(url, headers=headers, data=data)
-        if resp.status_code not in (200, 201, 204):
-            raise RuntimeError(f"Storage upload failed ({resp.status_code}): {resp.text[:300]}")
-
-def sb_upload_bytes(bucket: str, object_key: str, content: bytes, content_type="application/json", upsert=True) -> None:
-    url = f"{SUPABASE_URL}/storage/v1/object/{urllib.parse.quote(bucket)}/{urllib.parse.quote(object_key)}"
-    headers = {
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": content_type,
-        "x-upsert": "true" if upsert else "false",
-    }
-    resp = _rq.post(url, headers=headers, data=content)
-    if resp.status_code not in (200, 201):
-        if resp.status_code in (400, 409):
-            resp = _rq.put(url, headers=headers, data=content)
-        if resp.status_code not in (200, 201, 204):
-            raise RuntimeError(f"Storage upload failed ({resp.status_code}): {resp.text[:300]}")
-
-# ===== Local paths (optional but handy) =====
+# ===== Constants/paths =====
 BASE = "https://v3.football.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
 
@@ -72,9 +36,43 @@ FIX_DIR = RUN_DIR / "players_by_fixture"
 FIX_DIR.mkdir(parents=True, exist_ok=True)
 MANIFEST = RUN_DIR / "manifest.jsonl"
 
-def now():
+def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+# ---------- Supabase Storage helpers (REST) ----------
+def _sb_obj_url(bucket: str, object_key: str) -> str:
+    return f"{SUPABASE_URL}/storage/v1/object/{urllib.parse.quote(bucket)}/{urllib.parse.quote(object_key)}"
+
+def sb_upload_json(bucket: str, object_key: str, obj: dict, upsert: bool = True) -> None:
+    url = _sb_obj_url(bucket, object_key)
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "Content-Type": "application/json",
+        "x-upsert": "true" if upsert else "false",
+    }
+    data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    resp = requests.post(url, headers=headers, data=data)
+    if resp.status_code not in (200, 201):
+        if resp.status_code in (400, 409):
+            resp = requests.put(url, headers=headers, data=data)
+        if resp.status_code not in (200, 201, 204):
+            raise RuntimeError(f"Storage upload failed ({resp.status_code}): {resp.text[:300]}")
+
+def sb_upload_bytes(bucket: str, object_key: str, content: bytes, content_type="application/json", upsert: bool = True) -> None:
+    url = _sb_obj_url(bucket, object_key)
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "Content-Type": content_type,
+        "x-upsert": "true" if upsert else "false",
+    }
+    resp = requests.post(url, headers=headers, data=content)
+    if resp.status_code not in (200, 201):
+        if resp.status_code in (400, 409):
+            resp = requests.put(url, headers=headers, data=content)
+        if resp.status_code not in (200, 201, 204):
+            raise RuntimeError(f"Storage upload failed ({resp.status_code}): {resp.text[:300]}")
+
+# ---------- Local manifest helpers ----------
 def load_done_map():
     done = {}
     if MANIFEST.exists():
@@ -90,13 +88,19 @@ def load_done_map():
 def append_manifest(**rec):
     line = json.dumps(rec, ensure_ascii=False) + "\n"
     MANIFEST.open("a", encoding="utf-8").write(line)
-    # also push manifest line to Storage (append-like by rewriting whole file)
+    # also sync manifest to Storage (append-like by re-uploading whole file)
     try:
-        sb_upload_bytes(SUPABASE_BUCKET, f"{SEASON}_{ROUND.replace(' ', '_').replace('-', '_')}/manifest.jsonl",
-                        MANIFEST.read_bytes(), content_type="text/plain; charset=utf-8", upsert=True)
+        sb_upload_bytes(
+            SUPABASE_BUCKET,
+            f"{SEASON}_{ROUND.replace(' ', '_').replace('-', '_')}/manifest.jsonl",
+            MANIFEST.read_bytes(),
+            content_type="text/plain; charset=utf-8",
+            upsert=True,
+        )
     except Exception as e:
         print(f"⚠️ Failed to upload manifest: {e}")
 
+# ---------- HTTP helpers ----------
 def get_json(path, params=None):
     url = f"{BASE}{path}"
     r = requests.get(url, headers=HEADERS, params=params or {})
@@ -108,7 +112,8 @@ def get_json(path, params=None):
     return r, j
 
 def sleep_for_rate_limit(last_ts):
-    if last_ts is None: return time.time()
+    if last_ts is None:
+        return time.time()
     elapsed = time.time() - last_ts
     if elapsed < MIN_INTERVAL_SECONDS:
         time.sleep(MIN_INTERVAL_SECONDS - elapsed)
@@ -123,7 +128,7 @@ if r.status_code == 200 and isinstance(status, dict):
     except Exception as e:
         print(f"⚠️ Failed to upload status.json: {e}")
 else:
-    print(f"⚠️ status check failed: {r.status_code} {r.text[:200]}")
+    print(f"⚠️ status check failed: {r.status_code} {getattr(r, 'text', '')[:200]}")
 
 # ===== 1) Fixtures for round =====
 fixtures_path = RUN_DIR / "fixtures.json"
@@ -132,7 +137,7 @@ if fixtures_path.exists():
 else:
     r, fjson = get_json("/fixtures", params={"league": LEAGUE_ID, "season": SEASON, "round": ROUND})
     if r.status_code != 200 or not isinstance(fjson, dict):
-        print(f"❌ fixtures fetch failed: {r.status_code} {r.text[:200]}")
+        print(f"❌ fixtures fetch failed: {r.status_code} {getattr(r, 'text', '')[:200]}")
         sys.exit(1)
     fixtures_path.write_text(json.dumps(fjson, indent=2), encoding="utf-8")
     try:
@@ -185,9 +190,11 @@ for fx in fixtures:
             continue
 
         if r.status_code != 200 or not isinstance(j, dict):
-            msg = f"http {r.status_code}: {r.text[:200]}"
-            append_manifest(season=SEASON, round=ROUND, fixture_id=fixture_id,
-                            status="error", attempts=attempts, message=msg, updated_at=now())
+            msg = f"http {r.status_code}: {getattr(r, 'text', '')[:200]}"
+            append_manifest(
+                season=SEASON, round=ROUND, fixture_id=fixture_id,
+                status="error", attempts=attempts, message=msg, updated_at=now_iso()
+            )
             print(f"❌ Fixture {fixture_id} attempt {attempts} failed: {msg}")
         else:
             # Write locally (optional) and upload immediately to Supabase
@@ -196,8 +203,10 @@ for fx in fixtures:
                 sb_upload_json(SUPABASE_BUCKET, storage_key, j)
             except Exception as e:
                 print(f"⚠️ Failed to upload {storage_key}: {e}")
-            append_manifest(season=SEASON, round=ROUND, fixture_id=fixture_id,
-                            status="ok", attempts=attempts, message=f"saved:{out_path.name}", updated_at=now())
+            append_manifest(
+                season=SEASON, round=ROUND, fixture_id=fixture_id,
+                status="ok", attempts=attempts, message=f"saved:{out_path.name}", updated_at=now_iso()
+            )
             ok_count += 1
             print(f"✅ Saved {out_path.name} and uploaded to storage: {storage_key}")
             break
